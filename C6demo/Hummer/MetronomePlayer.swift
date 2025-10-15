@@ -7,6 +7,7 @@ final class MetronomePlayer {
     private let buffer: AVAudioPCMBuffer?
 
     init() {
+        AudioSessionManager.shared.configureForPlayback()
         format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)

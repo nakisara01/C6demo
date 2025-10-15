@@ -22,10 +22,14 @@ final class ChordInference {
         let coverage: Double
         let rootWeight: Double
         let thirdWeight: Double
+        let seventhWeight: Double?
         let penalty: Double
 
         var baseConfidence: Double {
-            let raw = (coverage * 0.65) + (rootWeight * 0.2) + (thirdWeight * 0.15) - (penalty * 0.4)
+            var raw = (coverage * 0.6) + (rootWeight * 0.2) + (thirdWeight * 0.15) - (penalty * 0.4)
+            if let seventhWeight {
+                raw += seventhWeight * 0.1
+            }
             return max(0, raw)
         }
     }
@@ -40,32 +44,53 @@ final class ChordInference {
         let root: Int
         let quality: Quality
         let degree: String
+        let progressionTag: String
 
         enum Quality {
-            case major
-            case minor
-            case diminished
+            case majorTriad
+            case minorTriad
+            case diminishedTriad
+            case majorSeventh
+            case dominantSeventh
+            case minorSeventh
+            case halfDiminishedSeventh
 
             var symbolSuffix: String {
                 switch self {
-                case .major:
+                case .majorTriad:
                     return ""
-                case .minor:
+                case .minorTriad:
                     return "m"
-                case .diminished:
+                case .diminishedTriad:
                     return "°"
+                case .majorSeventh:
+                    return "maj7"
+                case .dominantSeventh:
+                    return "7"
+                case .minorSeventh:
+                    return "m7"
+                case .halfDiminishedSeventh:
+                    return "ø7"
                 }
             }
         }
 
-        func chordTones() -> [Int] {
+        func chordTones() -> [Int] { // root 음 기반 코드 구성음 찾기 함수 (ex. root가 0=(C)일 경우, majorTriad = [0, 4, 7] -> C, E, G, minorSeventh = [0, 3, 7, 10] -> C, D#, G, A# 등)
             switch quality {
-            case .major:
+            case .majorTriad:
                 return [root, (root + 4) % 12, (root + 7) % 12]
-            case .minor:
+            case .minorTriad:
                 return [root, (root + 3) % 12, (root + 7) % 12]
-            case .diminished:
+            case .diminishedTriad:
                 return [root, (root + 3) % 12, (root + 6) % 12]
+            case .majorSeventh:
+                return [root, (root + 4) % 12, (root + 7) % 12, (root + 11) % 12]
+            case .dominantSeventh:
+                return [root, (root + 4) % 12, (root + 7) % 12, (root + 10) % 12]
+            case .minorSeventh:
+                return [root, (root + 3) % 12, (root + 7) % 12, (root + 10) % 12]
+            case .halfDiminishedSeventh:
+                return [root, (root + 3) % 12, (root + 6) % 12, (root + 10) % 12]
             }
         }
     }
@@ -242,6 +267,13 @@ final class ChordInference {
             let rootWeight = histogram[template.root] / totalWeight
             let thirdPitch = chordTones[1]
             let thirdWeight = histogram[thirdPitch] / totalWeight
+            let seventhWeight: Double?
+            if chordTones.count > 3 {
+                let seventhPitch = chordTones[3]
+                seventhWeight = histogram[seventhPitch] / totalWeight
+            } else {
+                seventhWeight = nil
+            }
 
             var penalty: Double = 0
             for index in 0..<12 where histogram[index] > 0 {
@@ -255,6 +287,7 @@ final class ChordInference {
                                            coverage: coverage,
                                            rootWeight: rootWeight,
                                            thirdWeight: thirdWeight,
+                                           seventhWeight: seventhWeight,
                                            penalty: penalty)
 
             return candidate.baseConfidence >= 0.15 ? candidate : nil
@@ -338,7 +371,7 @@ final class ChordInference {
     }
 
     private func transitionBonus(from previous: ChordTemplate, to next: ChordTemplate) -> Double {
-        let key = "\(previous.degree)->\(next.degree)"
+        let key = "\(previous.progressionTag)->\(next.progressionTag)"
         let progressionBonus: [String: Double] = [
             "V->I": 0.18,
             "V->vi": 0.08,
@@ -357,7 +390,7 @@ final class ChordInference {
 
         var bonus = progressionBonus[key] ?? 0
 
-        if previous.degree == next.degree {
+        if previous.progressionTag == next.progressionTag {
             bonus += 0.06
         }
 
@@ -422,7 +455,7 @@ final class ChordInference {
         return updated
     }
 
-    private func diatonicScale(for key: KeyCandidate) -> Set<Int> {
+    private func diatonicScale(for key: KeyCandidate) -> Set<Int> { // KeyCandidate에서 입력된 키를 기반으로 스케일 생성
         let majorIntervals = [0, 2, 4, 5, 7, 9, 11]
         let minorIntervals = [0, 2, 3, 5, 7, 8, 10]
         let intervals = key.mode == .major ? majorIntervals : minorIntervals
@@ -430,45 +463,86 @@ final class ChordInference {
     }
 
     private func diatonicChords(for key: KeyCandidate, scale: Set<Int>) -> [ChordTemplate] {
-        let baseDegreesMajor: [(offset: Int, quality: ChordTemplate.Quality, degree: String)] = [
-            (0, .major, "I"),
-            (2, .minor, "ii"),
-            (4, .minor, "iii"),
-            (5, .major, "IV"),
-            (7, .major, "V"),
-            (9, .minor, "vi"),
-            (11, .diminished, "vii°")
+        struct Entry {
+            let offset: Int
+            let quality: ChordTemplate.Quality
+            let degree: String
+            let progressionTag: String
+        }
+
+        let triadsMajor: [Entry] = [
+            Entry(offset: 0, quality: .majorTriad, degree: "I", progressionTag: "I"),
+            Entry(offset: 2, quality: .minorTriad, degree: "ii", progressionTag: "ii"),
+            Entry(offset: 4, quality: .minorTriad, degree: "iii", progressionTag: "iii"),
+            Entry(offset: 5, quality: .majorTriad, degree: "IV", progressionTag: "IV"),
+            Entry(offset: 7, quality: .majorTriad, degree: "V", progressionTag: "V"),
+            Entry(offset: 9, quality: .minorTriad, degree: "vi", progressionTag: "vi"),
+            Entry(offset: 11, quality: .diminishedTriad, degree: "vii°", progressionTag: "vii°")
         ]
 
-        let baseDegreesMinor: [(offset: Int, quality: ChordTemplate.Quality, degree: String)] = [
-            (0, .minor, "i"),
-            (2, .diminished, "ii°"),
-            (3, .major, "III"),
-            (5, .minor, "iv"),
-            (7, .minor, "v"),
-            (8, .major, "VI"),
-            (10, .major, "VII")
+        let seventhsMajor: [Entry] = [
+            Entry(offset: 0, quality: .majorSeventh, degree: "Imaj7", progressionTag: "I"),
+            Entry(offset: 2, quality: .minorSeventh, degree: "ii7", progressionTag: "ii"),
+            Entry(offset: 4, quality: .minorSeventh, degree: "iii7", progressionTag: "iii"),
+            Entry(offset: 5, quality: .majorSeventh, degree: "IVmaj7", progressionTag: "IV"),
+            Entry(offset: 7, quality: .dominantSeventh, degree: "V7", progressionTag: "V"),
+            Entry(offset: 9, quality: .minorSeventh, degree: "vi7", progressionTag: "vi"),
+            Entry(offset: 11, quality: .halfDiminishedSeventh, degree: "viiø7", progressionTag: "vii°")
         ]
 
-        let base = key.mode == .major ? baseDegreesMajor : baseDegreesMinor
-        var chords: [ChordTemplate] = base.map { entry in
+        let triadsMinor: [Entry] = [
+            Entry(offset: 0, quality: .minorTriad, degree: "i", progressionTag: "i"),
+            Entry(offset: 2, quality: .diminishedTriad, degree: "ii°", progressionTag: "ii°"),
+            Entry(offset: 3, quality: .majorTriad, degree: "III", progressionTag: "III"),
+            Entry(offset: 5, quality: .minorTriad, degree: "iv", progressionTag: "iv"),
+            Entry(offset: 7, quality: .minorTriad, degree: "v", progressionTag: "v"),
+            Entry(offset: 8, quality: .majorTriad, degree: "VI", progressionTag: "VI"),
+            Entry(offset: 10, quality: .majorTriad, degree: "VII", progressionTag: "VII")
+        ]
+
+        let seventhsMinor: [Entry] = [
+            Entry(offset: 0, quality: .minorSeventh, degree: "i7", progressionTag: "i"),
+            Entry(offset: 2, quality: .halfDiminishedSeventh, degree: "iiø7", progressionTag: "ii°"),
+            Entry(offset: 3, quality: .majorSeventh, degree: "IIImaj7", progressionTag: "III"),
+            Entry(offset: 5, quality: .minorSeventh, degree: "iv7", progressionTag: "iv"),
+            Entry(offset: 7, quality: .dominantSeventh, degree: "V7", progressionTag: "V"),
+            Entry(offset: 8, quality: .majorSeventh, degree: "VImaj7", progressionTag: "VI"),
+            Entry(offset: 10, quality: .dominantSeventh, degree: "VII7", progressionTag: "VII")
+        ]
+
+        var entries: [Entry]
+        if key.mode == .major {
+            entries = triadsMajor + seventhsMajor
+        } else {
+            entries = triadsMinor + seventhsMinor
+        }
+
+        var chords: [ChordTemplate] = entries.map { entry in
             let root = (key.tonic + entry.offset) % 12
-            return ChordTemplate(root: root, quality: entry.quality, degree: entry.degree)
+            return ChordTemplate(root: root,
+                                 quality: entry.quality,
+                                 degree: entry.degree,
+                                 progressionTag: entry.progressionTag)
         }
 
         if key.mode == .minor {
-            // Include dominant major chord as common harmonic minor borrowing.
+            // Include dominant major triad as common harmonic borrowing if not already included.
             let dominantRoot = (key.tonic + 7) % 12
-            let dominant = ChordTemplate(root: dominantRoot, quality: .major, degree: "V")
-            chords.append(dominant)
+            let dominantTriad = ChordTemplate(root: dominantRoot,
+                                              quality: .majorTriad,
+                                              degree: "V",
+                                              progressionTag: "V")
+            if !chords.contains(where: { $0.root == dominantTriad.root && $0.quality == dominantTriad.quality }) {
+                chords.append(dominantTriad)
+            }
         }
 
-        // Filter out chords whose tones largely leave the scale (for minor borrowed V keep).
         chords = chords.filter { template in
-            if template.degree == "V" && key.mode == .minor {
+            if key.mode == .minor && template.progressionTag == "V" {
                 return true
             }
-            return template.chordTones().allSatisfy { scale.contains($0) }
+            let tones = template.chordTones()
+            return tones.allSatisfy { scale.contains($0) }
         }
 
         return chords

@@ -52,9 +52,11 @@ struct ChordInferenceSmokeTest {
 
     private static func makeMeasure(index: Int, notes: [String]) -> MeasureAnalysis {
         let events = notes.enumerated().map { (offset, note) -> NoteEvent in
+            let midi = midiNumber(for: note)
             NoteEvent(noteName: note,
                       solfege: "-",
                       frequency: frequency(for: note),
+                      midiNote: midi,
                       startBeat: Double(offset),
                       durationBeats: 1.0,
                       confidence: 0.95)
@@ -69,6 +71,12 @@ struct ChordInferenceSmokeTest {
         guard let index = names.firstIndex(of: note) else { return 440 }
         let midi = 60 + index + (octave - 4) * 12
         return 440.0 * pow(2.0, (Double(midi) - 69.0) / 12.0)
+    }
+
+    private static func midiNumber(for note: String, octave: Int = 4) -> Int {
+        let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        guard let index = names.firstIndex(of: note) else { return 60 }
+        return 60 + index + (octave - 4) * 12
     }
 }
 #endif

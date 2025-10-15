@@ -36,6 +36,7 @@ struct NoteEvent: Identifiable {
     let noteName: String
     let solfege: String
     let frequency: Double
+    let midiNote: Int
     let startBeat: Double
     let durationBeats: Double
     let confidence: Double

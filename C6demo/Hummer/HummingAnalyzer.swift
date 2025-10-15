@@ -46,6 +46,7 @@ final class HummingAnalyzer {
                     completion(.success(()))
                 }
             } catch {
+                AudioSessionManager.shared.deactivateRecordingSession()
                 DispatchQueue.main.async {
                     completion(.failure(error))
                 }
@@ -87,6 +88,7 @@ final class HummingAnalyzer {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRecording = false
+        AudioSessionManager.shared.deactivateRecordingSession()
 
         var samplesCopy: [Float] = []
         recordingQueue.sync {
@@ -129,8 +131,12 @@ final class HummingAnalyzer {
     }
 
     private func configureSession() throws {
-        try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetooth])
-        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+        try AudioSessionManager.shared.configureForRecording()
+    }
+
+    func cancelRecordingPreparation() {
+        guard !isRecording else { return }
+        AudioSessionManager.shared.deactivateRecordingSession()
     }
 
     private func beginEngineRecording() throws {
@@ -295,6 +301,7 @@ final class HummingAnalyzer {
                 guard let noteName = currentNote, currentFrameCount > 0 else { return }
                 let avgFrequency = currentFrequencySum / Double(currentFrameCount)
                 let avgConfidence = currentConfidenceSum / Double(currentFrameCount)
+                let midiNote = midiNoteNumber(for: avgFrequency)
                 let durationSeconds = finalTime - currentStartTime
                 let startBeat = (currentStartTime - measureStartTime) / secondsPerBeat
                 let durationBeats = durationSeconds / secondsPerBeat
@@ -302,6 +309,7 @@ final class HummingAnalyzer {
                 let event = NoteEvent(noteName: noteName,
                                       solfege: currentSolfege,
                                       frequency: avgFrequency,
+                                      midiNote: midiNote,
                                       startBeat: startBeat,
                                       durationBeats: durationBeats,
                                       confidence: avgConfidence)
@@ -347,6 +355,12 @@ final class HummingAnalyzer {
         }
 
         return results
+    }
+
+    private func midiNoteNumber(for frequency: Double) -> Int {
+        guard frequency > 0 else { return -1 }
+        let midi = 69 + 12 * log2(frequency / 440.0)
+        return Int(midi.rounded())
     }
 
     private func noteName(for frequency: Double) -> (note: String, solfege: String) {

@@ -235,9 +235,12 @@ struct ContentView: View {
                     }
                 }
 
+                SelectedChordSummary(measures: analysis.measures)
+
                 VStack(spacing: 14) {
                     ForEach(analysis.measures) { measure in
-                        MeasureCard(measure: measure) { selection in
+                        MeasureCard(measure: measure,
+                                    timeSignature: analysis.timeSignature) { selection in
                             viewModel.selectChord(selection, for: measure)
                         }
                     }
@@ -393,6 +396,7 @@ private struct LabeledField<Content: View>: View {
 
 private struct MeasureCard: View {
     let measure: MeasureAnalysis
+    let timeSignature: TimeSignature
     let onSelect: (ChordPrediction?) -> Void
 
     var body: some View {
@@ -447,27 +451,247 @@ private struct MeasureCard: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
-                    VStack(spacing: 8) {
-                        ForEach(measure.noteEvents) { event in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("\(event.noteName) / \(event.solfege)")
-                                        .font(.subheadline.weight(.semibold))
-                                    Text("시작 \(event.startBeat, specifier: "%.2f") 박 · 길이 \(event.durationBeats, specifier: "%.2f") 박")
-                                        .font(.caption)
+                    VStack(spacing: 12) {
+                        MeasureNoteRoll(measure: measure, timeSignature: timeSignature)
+                            .frame(height: 140)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+
+                        VStack(spacing: 8) {
+                            ForEach(measure.noteEvents) { event in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("MIDI \(event.midiNote) · \(event.noteName) / \(event.solfege)")
+                                            .font(.subheadline.weight(.semibold))
+                                        Text("시작 \(event.startBeat, specifier: "%.2f") 박 · 길이 \(event.durationBeats, specifier: "%.2f") 박")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text("신뢰도 \(event.confidence, specifier: "%.2f")")
+                                        .font(.caption.monospaced())
                                         .foregroundStyle(.secondary)
                                 }
-                                Spacer()
-                                Text("신뢰도 \(event.confidence, specifier: "%.2f")")
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
+                                .padding(12)
+                                .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
-                            .padding(12)
-                            .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+private struct MeasureNoteRoll: View {
+    let measure: MeasureAnalysis
+    let timeSignature: TimeSignature
+
+    private var midiEvents: [NoteEvent] {
+        measure.noteEvents.filter { $0.midiNote >= 0 }
+    }
+
+    private var midiBounds: (min: Int, max: Int)? {
+        guard let minValue = midiEvents.map(\.midiNote).min(),
+              let maxValue = midiEvents.map(\.midiNote).max() else {
+            return nil
+        }
+        return (minValue, maxValue)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("MIDI 노트 롤")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(UIColor.tertiarySystemFill))
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color(UIColor.separator).opacity(0.3), lineWidth: 1)
+
+                Canvas { context, size in
+                    let events = midiEvents
+                    guard !events.isEmpty else { return }
+
+                    let beatsPerMeasure = max(1.0, Double(timeSignature.upper))
+                    let midiValues = events.map { Double($0.midiNote) }
+                    let minMidi = (midiValues.min() ?? 60) - 1
+                    let maxMidi = (midiValues.max() ?? 72) + 1
+                    let midiRange = max(1.0, maxMidi - minMidi)
+                    let noteHeight = max(18.0, size.height * 0.18)
+
+                    for grid in 0...timeSignature.upper {
+                        let ratio = Double(grid) / beatsPerMeasure
+                        let x = size.width * ratio
+                        var path = Path()
+                        path.move(to: CGPoint(x: x, y: 0))
+                        path.addLine(to: CGPoint(x: x, y: size.height))
+                        let opacity: Double = grid == 0 ? 0.35 : 0.18
+                        context.stroke(path,
+                                       with: .color(Color.primary.opacity(opacity)),
+                                       lineWidth: grid == 0 ? 1.4 : 0.9)
+                    }
+
+                    let midiStart = Int(floor(minMidi / 12.0)) * 12
+                    let midiEnd = Int(ceil(maxMidi / 12.0)) * 12
+                    if midiEnd - midiStart > 0 {
+                        var octave = midiStart
+                        while octave <= midiEnd {
+                            let normalized = (Double(octave) - minMidi) / midiRange
+                            let y = size.height * (1 - normalized)
+                            var path = Path()
+                            path.move(to: CGPoint(x: 0, y: y))
+                            path.addLine(to: CGPoint(x: size.width, y: y))
+                            context.stroke(path,
+                                           with: .color(Color.primary.opacity(0.12)),
+                                           lineWidth: 0.8)
+                            octave += 12
+                        }
+                    }
+
+                    for event in events {
+                        let clampedStart = max(0.0, min(event.startBeat, beatsPerMeasure))
+                        let clampedEnd = max(clampedStart, min(event.startBeat + event.durationBeats, beatsPerMeasure))
+                        let startRatio = clampedStart / beatsPerMeasure
+                        let durationRatio = max(0.03, (clampedEnd - clampedStart) / beatsPerMeasure)
+                        let rectWidth = max(size.width * durationRatio, 4.0)
+                        let rectX = size.width * startRatio
+
+                        let normalizedMidi = (Double(event.midiNote) - minMidi) / midiRange
+                        let midY = size.height * (1 - normalizedMidi)
+                        var rect = CGRect(x: rectX,
+                                          y: midY - noteHeight / 2,
+                                          width: rectWidth,
+                                          height: noteHeight)
+                        rect.origin.y = min(max(rect.origin.y, 0), size.height - noteHeight)
+
+                        let rounded = Path(roundedRect: rect, cornerRadius: noteHeight / 2, style: .continuous)
+                        context.fill(rounded,
+                                     with: .color(Color.accentColor.opacity(0.85)))
+
+                        let label = Text(event.noteName)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(.white)
+                        let resolved = context.resolve(label)
+                        context.draw(resolved, at: CGPoint(x: rect.midX, y: rect.midY))
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .overlay(alignment: .leading) {
+                if let bounds = midiBounds {
+                    VStack(alignment: .leading) {
+                        Text("MIDI \(bounds.max)")
+                        Spacer()
+                        Text("MIDI \(bounds.min)")
+                    }
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                }
+            }
+            .overlay(alignment: .trailing) {
+                if let bounds = midiBounds {
+                    VStack(alignment: .trailing) {
+                        Text(noteLabel(for: bounds.max))
+                        Spacer()
+                        Text(noteLabel(for: bounds.min))
+                    }
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                }
+            }
+        }
+    }
+
+    private func noteLabel(for midi: Int) -> String {
+        let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        let index = (midi % 12 + 12) % 12
+        let octave = midi / 12 - 1
+        return "\(names[index])\(octave)"
+    }
+}
+
+private struct SelectedChordSummary: View {
+    let measures: [MeasureAnalysis]
+
+    var body: some View {
+        AdaptiveCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Label("선택된 코드 진행", systemImage: "music.note.list")
+                        .font(.headline)
+                    Spacer()
+                }
+
+                if measures.allSatisfy({ $0.chord == nil }) {
+                    Text("선정된 코드가 없습니다.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            ForEach(measures) { measure in
+                                ChordSummaryChip(measureIndex: measure.index,
+                                                 chord: measure.chord,
+                                                 isManual: measure.selectedChord != nil)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ChordSummaryChip: View {
+    let measureIndex: Int
+    let chord: ChordPrediction?
+    let isManual: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("마디 \(measureIndex + 1)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(displayText)
+                .font(.headline)
+                .foregroundStyle(.primary)
+            if let chord {
+                Text(chord.degree)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if isManual {
+                Text("수동 선택")
+                    .font(.caption2)
+                    .foregroundColor(.accentColor)
+            }
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(cardBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(isManual ? Color.accentColor.opacity(0.7) : Color(UIColor.separator).opacity(0.2), lineWidth: 1)
+                )
+        )
+    }
+
+    private var displayText: String {
+        chord?.symbol ?? "-"
+    }
+
+    private var cardBackground: Color {
+        if let _ = chord {
+            return Color(UIColor.secondarySystemBackground)
+        } else {
+            return Color(UIColor.systemGray6)
         }
     }
 }

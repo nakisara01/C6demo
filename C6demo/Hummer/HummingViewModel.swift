@@ -217,6 +217,7 @@ final class HummingViewModel: ObservableObject {
         countdownTimer = nil
         countdownText = nil
         metronomePulse = false
+        analyzer.cancelRecordingPreparation()
         if resetState {
             state = .idle
         }
